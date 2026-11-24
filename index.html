@@ -1,1 +1,982 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HM-10 BLE Serial Terminal</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbar for terminal */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #09090b;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #27272a;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.85); opacity: 0.8; }
+      70% { transform: scale(1.4); opacity: 0; }
+      100% { transform: scale(1.4); opacity: 0; }
+    }
+    .status-pulse::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 9999px;
+      background-color: inherit;
+      animation: pulse-ring 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 font-sans min-h-screen flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
 
+  <!-- Browser Compatibility Warning Banner (Hidden by default, shown via JS if navigator.bluetooth is missing) -->
+  <div id="compatBanner" class="hidden bg-amber-950/80 border-b border-amber-700/60 px-4 py-3 text-amber-200 text-sm">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+      <div class="flex items-start gap-3">
+        <svg class="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <div>
+          <p class="font-semibold text-amber-300">Web Bluetooth API Unavailable</p>
+          <p class="text-xs text-amber-200/90 mt-0.5">
+            Your browser or connection context does not support Web Bluetooth. Please use <strong>Google Chrome, Microsoft Edge, or Opera</strong> (Desktop or Android) over <strong>HTTPS</strong> (GitHub Pages provides HTTPS automatically) or <code class="bg-amber-900/60 px-1 rounded">localhost</code>. You can still test the interface using <strong>Simulate HM-10</strong> mode!
+          </p>
+        </div>
+      </div>
+      <button onclick="document.getElementById('compatBanner').classList.add('hidden')" class="text-xs bg-amber-900/70 hover:bg-amber-800 px-3 py-1.5 rounded-lg border border-amber-700/50 shrink-0 transition">
+        Dismiss
+      </button>
+    </div>
+  </div>
+
+  <!-- Top Navigation Header -->
+  <header class="bg-zinc-900/90 backdrop-blur border-b border-zinc-800 sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      
+      <!-- Brand & Status -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-emerald-500/20 border border-cyan-500/30 flex items-center justify-center shadow-inner">
+          <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-bold text-base sm:text-lg tracking-tight text-white">HM-10 BLE Terminal</h1>
+            <span class="hidden sm:inline-block text-[11px] font-mono px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-400 border border-zinc-700/70">FFE0 / FFE1</span>
+          </div>
+          <div class="flex items-center gap-2 text-xs mt-0.5">
+            <span id="statusDot" class="relative inline-block w-2.5 h-2.5 rounded-full bg-zinc-500"></span>
+            <span id="statusText" class="text-zinc-400 font-medium">Disconnected</span>
+            <span id="deviceNameBadge" class="hidden text-cyan-400 font-mono bg-cyan-950/60 border border-cyan-800/50 px-1.5 py-0.2 rounded text-[11px]"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connection Controls -->
+      <div class="flex flex-wrap items-center gap-2">
+        <!-- Filter Toggle -->
+        <label class="hidden md:flex items-center gap-2 text-xs text-zinc-400 bg-zinc-950/70 border border-zinc-800 px-3 py-2 rounded-xl cursor-pointer hover:border-zinc-700 transition" title="Uncheck to show ALL nearby BLE devices (useful for clones like AT-09, JDY-08, or custom-named modules)">
+          <input id="filterServiceCheckbox" type="checkbox" class="rounded bg-zinc-800 border-zinc-600 text-cyan-500 focus:ring-cyan-500/30">
+          <span>Filter FFE0 UUID</span>
+        </label>
+
+        <!-- Simulate Mode Toggle -->
+        <button id="simToggleBtn" onclick="toggleSimulation()" class="flex items-center gap-1.5 text-xs sm:text-sm font-medium px-3 py-2 rounded-xl border border-zinc-700 bg-zinc-800/80 hover:bg-zinc-800 text-zinc-200 transition">
+          <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+          </svg>
+          <span id="simBtnLabel">Simulate HM-10</span>
+        </button>
+
+        <!-- Connect / Disconnect Button -->
+        <button id="connectBtn" onclick="handleConnectionClick()" class="flex items-center gap-2 text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-500/20 transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+          <span id="connectBtnLabel">Connect Device</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Toast Notification Box (Replaces alert()) -->
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0"></div>
+
+  <!-- Main Workspace -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+    <!-- Left / Main Column: Serial Terminal (8 cols on lg) -->
+    <section class="lg:col-span-8 flex flex-col bg-zinc-900/70 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl min-h-[480px] lg:h-[calc(100vh-6.5rem)]">
+      
+      <!-- Terminal Toolbar -->
+      <div class="bg-zinc-900 border-b border-zinc-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold uppercase tracking-wider text-zinc-400">Serial Monitor</span>
+          <span id="byteCounter" class="text-[11px] font-mono text-zinc-500 bg-zinc-950 px-2 py-0.5 rounded-md border border-zinc-800">RX: 0B | TX: 0B</span>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- ASCII / HEX Toggle -->
+          <div class="flex rounded-lg bg-zinc-950 p-0.5 border border-zinc-800 text-xs font-mono">
+            <button id="viewAsciiBtn" onclick="setViewMode('ascii')" class="px-2.5 py-1 rounded-md bg-zinc-800 text-cyan-400 font-semibold transition">ASCII</button>
+            <button id="viewHexBtn" onclick="setViewMode('hex')" class="px-2.5 py-1 rounded-md text-zinc-400 hover:text-zinc-200 transition">HEX</button>
+          </div>
+
+          <!-- Auto-scroll Toggle -->
+          <button id="autoScrollBtn" onclick="toggleAutoScroll()" class="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 transition" title="Toggle Auto-Scroll">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+            </svg>
+            <span class="hidden sm:inline">Auto-scroll</span>
+          </button>
+
+          <!-- Export Log -->
+          <button onclick="exportLogs()" class="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700/80 bg-zinc-800/70 hover:bg-zinc-800 text-zinc-300 transition" title="Download log as .txt">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            <span class="hidden sm:inline">Export</span>
+          </button>
+
+          <!-- Clear Terminal -->
+          <button onclick="clearTerminal()" class="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700/80 bg-zinc-800/70 hover:bg-rose-950/60 hover:border-rose-800/60 hover:text-rose-300 text-zinc-300 transition" title="Clear terminal output">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>
+            <span class="hidden sm:inline">Clear</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Scrollable Console Output -->
+      <div id="terminalOutput" class="flex-1 bg-zinc-950 p-4 font-mono text-xs sm:text-sm overflow-y-auto space-y-1.5 leading-relaxed">
+        <div class="text-zinc-500 select-none">
+          <span class="text-cyan-500/80">[SYSTEM]</span> Ready. Click <span class="text-zinc-300 font-semibold">Connect Device</span> to pair with your HM-10 module, or try <span class="text-purple-400 font-semibold">Simulate HM-10</span>.
+        </div>
+        <div class="text-zinc-600 text-xs select-none">
+          <span class="text-zinc-500">[INFO]</span> Payloads exceeding 20 bytes are automatically chunked for BLE 4.0 MTU compatibility.
+        </div>
+      </div>
+
+      <!-- Transmit (TX) Input Bar -->
+      <div class="bg-zinc-900 border-t border-zinc-800 p-3">
+        <form onsubmit="handleSendForm(event)" class="flex flex-col sm:flex-row gap-2">
+          <div class="flex-1 flex items-center bg-zinc-950 border border-zinc-700/90 focus-within:border-cyan-500 rounded-xl overflow-hidden transition">
+            <span class="pl-3 pr-2 text-xs font-mono font-bold text-cyan-500 select-none">TX&gt;</span>
+            <input 
+              id="txInput" 
+              type="text" 
+              placeholder="Type message or AT command (e.g. AT, Hello Arduino)..." 
+              autocomplete="off"
+              class="w-full bg-transparent py-2.5 pr-3 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none"
+            />
+          </div>
+
+          <div class="flex items-center gap-2">
+            <!-- Line Ending Selector -->
+            <select id="lineEndingSelect" aria-label="Line Ending" class="bg-zinc-950 border border-zinc-700/90 text-zinc-300 text-xs font-mono rounded-xl px-3 py-2.5 focus:outline-none focus:border-cyan-500 cursor-pointer" title="Line ending appended to outgoing messages">
+              <option value="">None</option>
+              <option value="\n">LF (\n)</option>
+              <option value="\r">CR (\r)</option>
+              <option value="\r\n" selected>CRLF (\r\n)</option>
+            </select>
+
+            <!-- Send Button -->
+            <button type="submit" class="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold text-sm px-5 py-2.5 rounded-xl shadow-lg shadow-emerald-500/15 transition">
+              <span>Send</span>
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+              </svg>
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- Right Column: Quick AT Commands & Custom Macro Pad (4 cols on lg) -->
+    <aside class="lg:col-span-4 flex flex-col gap-4 lg:h-[calc(100vh-6.5rem)] lg:overflow-y-auto pr-0.5">
+
+      <!-- Custom Macro Pad Card -->
+      <div class="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-4 shadow-xl">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h2 class="text-sm font-semibold text-white">Custom Macro Pad</h2>
+            <p class="text-[11px] text-zinc-400">Saved locally in your browser</p>
+          </div>
+          <button onclick="openMacroModal()" class="flex items-center gap-1 text-xs font-medium bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 px-2.5 py-1.5 rounded-lg transition">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            <span>Add Macro</span>
+          </button>
+        </div>
+
+        <div id="macroGrid" class="grid grid-cols-2 gap-2">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </div>
+
+      <!-- HM-10 Quick AT Commands Card -->
+      <div class="bg-zinc-900/70 border border-zinc-800 rounded-2xl p-4 shadow-xl flex-1 flex flex-col">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-sm font-semibold text-white">HM-10 AT Commands</h2>
+          <span class="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700">Reference</span>
+        </div>
+
+        <!-- Important Hardware Note -->
+        <div class="bg-zinc-950/90 border border-zinc-800/90 rounded-xl p-2.5 mb-3 text-[11px] text-zinc-400 leading-relaxed">
+          <span class="text-amber-400 font-semibold">Hardware Tip:</span> Standard HM-10 firmware only processes <code class="text-zinc-200">AT</code> commands when <em>unconnected</em> over UART (or when forwarded by your Arduino). Note that genuine HM-10 modules often expect <strong>None</strong> as the line ending for AT commands.
+        </div>
+
+        <div class="grid grid-cols-2 gap-2" id="atCommandGrid">
+          <!-- Populated dynamically via JS -->
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <!-- Add / Edit Macro Modal -->
+  <div id="macroModal" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl max-w-md w-full p-5 shadow-2xl">
+      <div class="flex items-center justify-between mb-4">
+        <h3 id="macroModalTitle" class="text-base font-bold text-white">Add Custom Macro</h3>
+        <button onclick="closeMacroModal()" class="text-zinc-400 hover:text-white p-1 rounded-lg">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <form onsubmit="saveMacro(event)" class="space-y-3">
+        <input type="hidden" id="macroEditIndex" value="-1" />
+        <div>
+          <label class="block text-xs font-medium text-zinc-300 mb-1">Button Label</label>
+          <input id="macroNameInput" type="text" required placeholder="e.g., LED ON" class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-zinc-300 mb-1">Payload String</label>
+          <input id="macroPayloadInput" type="text" required placeholder="e.g., 1 or LED=ON" class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-cyan-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-zinc-300 mb-1">Line Ending Override</label>
+          <select id="macroEndingInput" class="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-3 py-2 text-sm font-mono text-zinc-200 focus:outline-none focus:border-cyan-500">
+            <option value="global">Use Terminal Dropdown Setting</option>
+            <option value="">None</option>
+            <option value="\n">LF (\n)</option>
+            <option value="\r">CR (\r)</option>
+            <option value="\r\n">CRLF (\r\n)</option>
+          </select>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-3">
+          <button type="button" onclick="closeMacroModal()" class="px-4 py-2 text-xs font-medium rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition">Cancel</button>
+          <button type="submit" class="px-4 py-2 text-xs font-semibold rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 transition">Save Macro</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // HM-10 BLE UUID Constants & Application State
+    // =========================================================================
+    const HM10_SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
+    const HM10_CHAR_UUID    = '0000ffe1-0000-1000-8000-00805f9b34fb';
+    const BLE_CHUNK_SIZE    = 20; // BLE 4.0 ATT MTU default payload limit
+
+    let bleDevice = null;
+    let bleServer = null;
+    let hm10Characteristic = null;
+    let isConnected = false;
+    let isSimulating = false;
+    let viewMode = 'ascii'; // 'ascii' | 'hex'
+    let autoScroll = true;
+    let rxByteCount = 0;
+    let txByteCount = 0;
+
+    // Store structured log entries so toggling ASCII/HEX re-renders history cleanly
+    let logEntries = [];
+
+    // Built-in HM-10 AT commands with descriptive tooltips
+    const AT_COMMANDS = [
+      { cmd: 'AT', desc: 'Connection test (expects OK)' },
+      { cmd: 'AT+VERSION?', desc: 'Query firmware version' },
+      { cmd: 'AT+ADDR?', desc: 'Query module MAC address' },
+      { cmd: 'AT+NAME?', desc: 'Query advertised BLE name' },
+      { cmd: 'AT+BAUD?', desc: 'Query UART baud rate (0=9600)' },
+      { cmd: 'AT+ROLE?', desc: 'Query role (0=Peripheral, 1=Central)' },
+      { cmd: 'AT+POWE?', desc: 'Query RF transmission power' },
+      { cmd: 'AT+RESET', desc: 'Reboot the HM-10 module' }
+    ];
+
+    // Default user macros
+    const DEFAULT_MACROS = [
+      { name: 'LED ON', payload: '1', ending: 'global' },
+      { name: 'LED OFF', payload: '0', ending: 'global' },
+      { name: 'Ping', payload: 'PING', ending: 'global' },
+      { name: 'Status ?', payload: 'STATUS?', ending: 'global' }
+    ];
+
+    let userMacros = [];
+
+    // =========================================================================
+    // Initialization
+    // =========================================================================
+    window.addEventListener('DOMContentLoaded', () => {
+      // Check Web Bluetooth API support
+      if (!navigator.bluetooth) {
+        document.getElementById('compatBanner').classList.remove('hidden');
+      }
+
+      loadMacros();
+      renderMacros();
+      renderAtCommands();
+
+      // Command history navigation with Up/Down arrows
+      const txInput = document.getElementById('txInput');
+      let cmdHistory = [];
+      let historyIdx = -1;
+
+      txInput.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp') {
+          if (cmdHistory.length > 0 && historyIdx < cmdHistory.length - 1) {
+            historyIdx++;
+            txInput.value = cmdHistory[cmdHistory.length - 1 - historyIdx];
+            e.preventDefault();
+          }
+        } else if (e.key === 'ArrowDown') {
+          if (historyIdx > 0) {
+            historyIdx--;
+            txInput.value = cmdHistory[cmdHistory.length - 1 - historyIdx];
+            e.preventDefault();
+          } else if (historyIdx === 0) {
+            historyIdx = -1;
+            txInput.value = '';
+            e.preventDefault();
+          }
+        }
+      });
+
+      // Hook into form submit to record history
+      window._recordHistory = (val) => {
+        if (val && cmdHistory[cmdHistory.length - 1] !== val) {
+          cmdHistory.push(val);
+        }
+        historyIdx = -1;
+      };
+    });
+
+    // =========================================================================
+    // Toast Notification Helper (Replaces alert/confirm)
+    // =========================================================================
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      const colors = {
+        info: 'bg-zinc-900 border-cyan-500/50 text-zinc-100',
+        success: 'bg-zinc-900 border-emerald-500/50 text-emerald-200',
+        error: 'bg-rose-950 border-rose-500/60 text-rose-200',
+        warn: 'bg-amber-950 border-amber-500/60 text-amber-200'
+      };
+      toast.className = `pointer-events-auto border ${colors[type] || colors.info} px-4 py-3 rounded-xl shadow-2xl text-xs font-medium flex items-center justify-between gap-3 transition-all duration-300`;
+      toast.innerHTML = `<span>${escapeHtml(message)}</span>`;
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(8px)';
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+
+    // =========================================================================
+    // Web Bluetooth Connection Logic
+    // =========================================================================
+    async function handleConnectionClick() {
+      if (isSimulating) {
+        toggleSimulation(); // Turn off simulation if user wants real hardware
+      }
+
+      if (isConnected) {
+        disconnectDevice();
+      } else {
+        await connectDevice();
+      }
+    }
+
+    async function connectDevice() {
+      if (!navigator.bluetooth) {
+        document.getElementById('compatBanner').classList.remove('hidden');
+        showToast('Web Bluetooth is not supported in this browser.', 'error');
+        return;
+      }
+
+      try {
+        updateStatusUI('connecting');
+        appendSystemLog('Requesting Bluetooth device...');
+
+        const filterByService = document.getElementById('filterServiceCheckbox').checked;
+        let requestOptions;
+
+        if (filterByService) {
+          requestOptions = {
+            filters: [{ services: [HM10_SERVICE_UUID] }],
+            optionalServices: [HM10_SERVICE_UUID]
+          };
+        } else {
+          // Accept all devices while declaring HM-10 optionalService so clones show up reliably
+          requestOptions = {
+            acceptAllDevices: true,
+            optionalServices: [HM10_SERVICE_UUID]
+          };
+        }
+
+        bleDevice = await navigator.bluetooth.requestDevice(requestOptions);
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        appendSystemLog(`Connecting to GATT server on "${bleDevice.name || 'Unnamed BLE Device'}"...`);
+        bleServer = await bleDevice.gatt.connect();
+
+        appendSystemLog('Discovering HM-10 Serial Service (0xFFE0)...');
+        const service = await bleServer.getPrimaryService(HM10_SERVICE_UUID);
+
+        appendSystemLog('Accessing RX/TX Characteristic (0xFFE1)...');
+        hm10Characteristic = await service.getCharacteristic(HM10_CHAR_UUID);
+
+        // Enable real-time notifications
+        await hm10Characteristic.startNotifications();
+        hm10Characteristic.addEventListener('characteristicvaluechanged', handleIncomingData);
+
+        isConnected = true;
+        updateStatusUI('connected', bleDevice.name || 'HM-10 Module');
+        appendSystemLog(`Connected! Ready to send and receive serial data.`);
+        showToast(`Connected to ${bleDevice.name || 'HM-10'}`, 'success');
+
+      } catch (error) {
+        console.error('BLE Connection Error:', error);
+        isConnected = false;
+        updateStatusUI('disconnected');
+        if (error.name === 'NotFoundError') {
+          appendSystemLog('Device selection cancelled.');
+        } else if (error.name === 'NotSupportedError') {
+          appendSystemLog('Error: Selected device does not expose HM-10 service 0000ffe0.');
+          showToast('Device lacks HM-10 FFE0 service.', 'error');
+        } else {
+          appendSystemLog(`Connection failed: ${error.message}`);
+          showToast(`Connection failed: ${error.message}`, 'error');
+        }
+      }
+    }
+
+    function disconnectDevice() {
+      if (bleDevice && bleDevice.gatt.connected) {
+        bleDevice.gatt.disconnect();
+      } else {
+        onDisconnected();
+      }
+    }
+
+    function onDisconnected() {
+      isConnected = false;
+      hm10Characteristic = null;
+      updateStatusUI('disconnected');
+      appendSystemLog('Device disconnected.');
+      showToast('Bluetooth device disconnected.', 'warn');
+    }
+
+    // =========================================================================
+    // Receiving Data (RX)
+    // =========================================================================
+    function handleIncomingData(event) {
+      const value = event.target.value; // DataView
+      const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      rxByteCount += bytes.length;
+      updateByteCounter();
+      appendDataLog('RX', bytes);
+    }
+
+    // =========================================================================
+    // Transmitting Data (TX) with 20-Byte Chunking
+    // =========================================================================
+    async function sendData(rawText, customEnding = null) {
+      if (!isConnected && !isSimulating) {
+        showToast('Connect to an HM-10 module or enable Simulate mode first.', 'warn');
+        return;
+      }
+
+      const endingSetting = customEnding !== null && customEnding !== 'global'
+        ? customEnding
+        : document.getElementById('lineEndingSelect').value;
+
+      // Convert escaped strings ("\n", "\r", "\r\n") into actual control characters
+      const actualEnding = endingSetting
+        .replace(/\\r/g, '\r')
+        .replace(/\\n/g, '\n');
+
+      const fullPayload = rawText + actualEnding;
+      const encoder = new TextEncoder();
+      const encodedBytes = encoder.encode(fullPayload);
+
+      if (encodedBytes.length === 0) return;
+
+      // Simulation Mode Handling
+      if (isSimulating) {
+        txByteCount += encodedBytes.length;
+        updateByteCounter();
+        appendDataLog('TX', encodedBytes);
+        simulateHm10Response(rawText.trim());
+        return;
+      }
+
+      // Real Hardware BLE Write (Chunked into <= 20-byte packets)
+      if (!hm10Characteristic) {
+        showToast('Characteristic 0xFFE1 not ready.', 'error');
+        return;
+      }
+
+      try {
+        for (let offset = 0; offset < encodedBytes.length; offset += BLE_CHUNK_SIZE) {
+          const chunk = encodedBytes.slice(offset, offset + BLE_CHUNK_SIZE);
+
+          if (hm10Characteristic.properties.writeWithoutResponse) {
+            await hm10Characteristic.writeValueWithoutResponse(chunk);
+          } else {
+            await hm10Characteristic.writeValueWithResponse(chunk);
+          }
+
+          // Small pacing delay between chunks for microcontroller UART buffer safety
+          if (offset + BLE_CHUNK_SIZE < encodedBytes.length) {
+            await new Promise(resolve => setTimeout(resolve, 15));
+          }
+        }
+
+        txByteCount += encodedBytes.length;
+        updateByteCounter();
+        appendDataLog('TX', encodedBytes);
+
+      } catch (error) {
+        console.error('BLE Write Error:', error);
+        appendSystemLog(`Write error: ${error.message}`);
+        showToast(`Failed to send: ${error.message}`, 'error');
+      }
+    }
+
+    function handleSendForm(event) {
+      event.preventDefault();
+      const input = document.getElementById('txInput');
+      const text = input.value;
+      if (!text && document.getElementById('lineEndingSelect').value === '') return;
+
+      window._recordHistory(text);
+      sendData(text);
+      input.value = '';
+    }
+
+    // =========================================================================
+    // Simulation Mode
+    // =========================================================================
+    function toggleSimulation() {
+      if (isConnected) {
+        disconnectDevice();
+      }
+
+      isSimulating = !isSimulating;
+      const simBtn = document.getElementById('simToggleBtn');
+      const simLabel = document.getElementById('simBtnLabel');
+
+      if (isSimulating) {
+        simBtn.classList.remove('bg-zinc-800/80', 'border-zinc-700', 'text-zinc-200');
+        simBtn.classList.add('bg-purple-500/20', 'border-purple-500/50', 'text-purple-200');
+        simLabel.textContent = 'Stop Simulation';
+        updateStatusUI('simulated', 'HM-10-SIM (Virtual)');
+        appendSystemLog('Simulation Mode enabled. Try sending AT commands or custom macros.');
+        showToast('HM-10 Simulator active', 'info');
+      } else {
+        simBtn.classList.add('bg-zinc-800/80', 'border-zinc-700', 'text-zinc-200');
+        simBtn.classList.remove('bg-purple-500/20', 'border-purple-500/50', 'text-purple-200');
+        simLabel.textContent = 'Simulate HM-10';
+        updateStatusUI('disconnected');
+        appendSystemLog('Simulation Mode stopped.');
+      }
+    }
+
+    function simulateHm10Response(cmd) {
+      const upper = cmd.toUpperCase();
+      let reply = '';
+
+      if (upper === 'AT') reply = 'OK';
+      else if (upper === 'AT+VERSION?') reply = 'HMSoft V710';
+      else if (upper === 'AT+ADDR?') reply = 'OK+ADDR:B4994C123456';
+      else if (upper === 'AT+NAME?') reply = 'OK+NAME:HMSoft';
+      else if (upper === 'AT+BAUD?') reply = 'OK+Get:0';
+      else if (upper === 'AT+ROLE?') reply = 'OK+Get:0';
+      else if (upper === 'AT+POWE?') reply = 'OK+Get:2';
+      else if (upper === 'AT+RESET') reply = 'OK+RESET';
+      else if (upper === '1' || upper === 'LED ON') reply = 'ACK: LED_PIN_13 = HIGH\r\n';
+      else if (upper === '0' || upper === 'LED OFF') reply = 'ACK: LED_PIN_13 = LOW\r\n';
+      else if (upper === 'PING') reply = 'PONG (RSSI: -54 dBm)\r\n';
+      else if (upper === 'STATUS?') reply = 'TEMP:24.6C | VBAT:3.28V | UPTIME:142s\r\n';
+      else reply = `ECHO: ${cmd}\r\n`;
+
+      setTimeout(() => {
+        if (!isSimulating) return;
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(reply);
+        rxByteCount += bytes.length;
+        updateByteCounter();
+        appendDataLog('RX', bytes);
+      }, 120);
+    }
+
+    // =========================================================================
+    // Terminal Rendering & Formatting
+    // =========================================================================
+    function getTimestamp() {
+      const now = new Date();
+      return now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+    }
+
+    function formatBytes(uint8Arr, mode) {
+      if (mode === 'hex') {
+        return Array.from(uint8Arr)
+          .map(b => b.toString(16).padStart(2, '0').toUpperCase())
+          .join(' ');
+      } else {
+        const decoder = new TextDecoder('utf-8', { fatal: false });
+        // Visualize CR/LF subtly if needed, or display clean text
+        return decoder.decode(uint8Arr)
+          .replace(/\r/g, '␍')
+          .replace(/\n/g, '␊\n')
+          .replace(/\n$/, '');
+      }
+    }
+
+    function appendSystemLog(text) {
+      const entry = { type: 'SYS', time: getTimestamp(), text };
+      logEntries.push(entry);
+      renderSingleLogEntry(entry);
+    }
+
+    function appendDataLog(direction, uint8Arr) {
+      const entry = { type: direction, time: getTimestamp(), bytes: uint8Arr };
+      logEntries.push(entry);
+      renderSingleLogEntry(entry);
+    }
+
+    function renderSingleLogEntry(entry) {
+      const terminal = document.getElementById('terminalOutput');
+      const row = document.createElement('div');
+
+      if (entry.type === 'SYS') {
+        row.className = 'text-zinc-500 text-xs';
+        row.innerHTML = `<span class="text-zinc-600">[${entry.time}]</span> <span class="text-cyan-500/80">[SYS]</span> ${escapeHtml(entry.text)}`;
+      } else {
+        const isTx = entry.type === 'TX';
+        const badgeClass = isTx
+          ? 'text-cyan-400 bg-cyan-950/60 border-cyan-800/50'
+          : 'text-emerald-400 bg-emerald-950/60 border-emerald-800/50';
+        const textClass = isTx ? 'text-cyan-100' : 'text-emerald-200';
+        const formatted = formatBytes(entry.bytes, viewMode);
+
+        row.className = 'flex items-start gap-2 break-all';
+        row.innerHTML = `
+          <span class="text-zinc-600 text-[11px] shrink-0 mt-0.5 select-none">${entry.time}</span>
+          <span class="text-[10px] font-bold px-1.5 py-0.2 rounded border shrink-0 mt-0.5 select-none ${badgeClass}">${entry.type}</span>
+          <span class="${textClass} whitespace-pre-wrap">${escapeHtml(formatted)}</span>
+        `;
+      }
+
+      terminal.appendChild(row);
+
+      if (autoScroll) {
+        terminal.scrollTop = terminal.scrollHeight;
+      }
+    }
+
+    function setViewMode(mode) {
+      viewMode = mode;
+      const asciiBtn = document.getElementById('viewAsciiBtn');
+      const hexBtn = document.getElementById('viewHexBtn');
+
+      if (mode === 'ascii') {
+        asciiBtn.className = 'px-2.5 py-1 rounded-md bg-zinc-800 text-cyan-400 font-semibold transition';
+        hexBtn.className = 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-zinc-200 transition';
+      } else {
+        hexBtn.className = 'px-2.5 py-1 rounded-md bg-zinc-800 text-cyan-400 font-semibold transition';
+        asciiBtn.className = 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-zinc-200 transition';
+      }
+
+      // Re-render all logged entries in the new format
+      const terminal = document.getElementById('terminalOutput');
+      terminal.innerHTML = '';
+      logEntries.forEach(renderSingleLogEntry);
+    }
+
+    function toggleAutoScroll() {
+      autoScroll = !autoScroll;
+      const btn = document.getElementById('autoScrollBtn');
+      if (autoScroll) {
+        btn.className = 'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 transition';
+        const terminal = document.getElementById('terminalOutput');
+        terminal.scrollTop = terminal.scrollHeight;
+      } else {
+        btn.className = 'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800/70 text-zinc-400 transition';
+      }
+    }
+
+    function clearTerminal() {
+      logEntries = [];
+      rxByteCount = 0;
+      txByteCount = 0;
+      updateByteCounter();
+      document.getElementById('terminalOutput').innerHTML = '';
+      appendSystemLog('Terminal cleared.');
+    }
+
+    function exportLogs() {
+      if (logEntries.length === 0) {
+        showToast('No logs to export.', 'warn');
+        return;
+      }
+
+      const lines = logEntries.map(entry => {
+        if (entry.type === 'SYS') {
+          return `[${entry.time}] [SYS] ${entry.text}`;
+        }
+        return `[${entry.time}] [${entry.type}] ${formatBytes(entry.bytes, viewMode)}`;
+      });
+
+      const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `hm10-serial-log-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Serial log exported!', 'success');
+    }
+
+    function updateByteCounter() {
+      document.getElementById('byteCounter').textContent = `RX: ${rxByteCount}B | TX: ${txByteCount}B`;
+    }
+
+    function updateStatusUI(state, deviceName = '') {
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      const badge = document.getElementById('deviceNameBadge');
+      const connectBtn = document.getElementById('connectBtn');
+      const connectLabel = document.getElementById('connectBtnLabel');
+
+      if (state === 'connected') {
+        dot.className = 'relative inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 status-pulse';
+        text.textContent = 'Connected';
+        text.className = 'text-emerald-400 font-semibold';
+        badge.textContent = deviceName;
+        badge.classList.remove('hidden');
+
+        connectBtn.className = 'flex items-center gap-2 text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 transition';
+        connectLabel.textContent = 'Disconnect';
+      } else if (state === 'simulated') {
+        dot.className = 'relative inline-block w-2.5 h-2.5 rounded-full bg-purple-400 status-pulse';
+        text.textContent = 'Simulated';
+        text.className = 'text-purple-400 font-semibold';
+        badge.textContent = deviceName;
+        badge.classList.remove('hidden');
+
+        connectBtn.className = 'flex items-center gap-2 text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-500/20 transition';
+        connectLabel.textContent = 'Connect Real Device';
+      } else if (state === 'connecting') {
+        dot.className = 'relative inline-block w-2.5 h-2.5 rounded-full bg-amber-400 status-pulse';
+        text.textContent = 'Pairing...';
+        text.className = 'text-amber-400 font-medium';
+      } else {
+        dot.className = 'relative inline-block w-2.5 h-2.5 rounded-full bg-zinc-500';
+        text.textContent = 'Disconnected';
+        text.className = 'text-zinc-400 font-medium';
+        badge.classList.add('hidden');
+
+        connectBtn.className = 'flex items-center gap-2 text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 shadow-lg shadow-cyan-500/20 transition';
+        connectLabel.textContent = 'Connect Device';
+      }
+    }
+
+    // =========================================================================
+    // Quick AT Commands & Custom Macros
+    // =========================================================================
+    function renderAtCommands() {
+      const grid = document.getElementById('atCommandGrid');
+      grid.innerHTML = '';
+
+      AT_COMMANDS.forEach(item => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.title = item.desc;
+        btn.onclick = () => sendData(item.cmd);
+        btn.className = 'group text-left bg-zinc-950 hover:bg-zinc-800/90 border border-zinc-800 hover:border-cyan-500/40 rounded-xl p-2.5 transition flex flex-col justify-between';
+        btn.innerHTML = `
+          <span class="font-mono text-xs font-semibold text-cyan-400 group-hover:text-cyan-300">${escapeHtml(item.cmd)}</span>
+          <span class="text-[10px] text-zinc-500 group-hover:text-zinc-400 line-clamp-1 mt-0.5">${escapeHtml(item.desc)}</span>
+        `;
+        grid.appendChild(btn);
+      });
+    }
+
+    function loadMacros() {
+      try {
+        const saved = localStorage.getItem('hm10_custom_macros');
+        userMacros = saved ? JSON.parse(saved) : [...DEFAULT_MACROS];
+      } catch {
+        userMacros = [...DEFAULT_MACROS];
+      }
+    }
+
+    function persistMacros() {
+      try {
+        localStorage.setItem('hm10_custom_macros', JSON.stringify(userMacros));
+      } catch (e) {
+        console.warn('Could not save macros to localStorage:', e);
+      }
+    }
+
+    function renderMacros() {
+      const grid = document.getElementById('macroGrid');
+      grid.innerHTML = '';
+
+      userMacros.forEach((macro, idx) => {
+        const card = document.createElement('div');
+        card.className = 'group relative bg-zinc-950 border border-zinc-800 hover:border-emerald-500/40 rounded-xl p-2.5 flex items-center justify-between gap-1 transition';
+
+        const triggerBtn = document.createElement('button');
+        triggerBtn.type = 'button';
+        triggerBtn.className = 'flex-1 text-left overflow-hidden';
+        triggerBtn.onclick = () => sendData(macro.payload, macro.ending);
+        triggerBtn.innerHTML = `
+          <div class="text-xs font-semibold text-zinc-200 group-hover:text-emerald-300 truncate">${escapeHtml(macro.name)}</div>
+          <div class="text-[11px] font-mono text-zinc-500 truncate">${escapeHtml(macro.payload)}</div>
+        `;
+
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'flex items-center gap-0.5 opacity-70 sm:opacity-0 group-hover:opacity-100 transition';
+        actionsDiv.innerHTML = `
+          <button type="button" onclick="openMacroModal(${idx})" title="Edit Macro" class="p-1 text-zinc-400 hover:text-cyan-400 rounded">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+          </button>
+          <button type="button" onclick="deleteMacro(${idx})" title="Delete Macro" class="p-1 text-zinc-400 hover:text-rose-400 rounded">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        `;
+
+        card.appendChild(triggerBtn);
+        card.appendChild(actionsDiv);
+        grid.appendChild(card);
+      });
+    }
+
+    function openMacroModal(editIndex = -1) {
+      const modal = document.getElementById('macroModal');
+      const title = document.getElementById('macroModalTitle');
+      const idxInput = document.getElementById('macroEditIndex');
+      const nameInput = document.getElementById('macroNameInput');
+      const payloadInput = document.getElementById('macroPayloadInput');
+      const endingInput = document.getElementById('macroEndingInput');
+
+      idxInput.value = editIndex;
+
+      if (editIndex >= 0 && userMacros[editIndex]) {
+        title.textContent = 'Edit Custom Macro';
+        nameInput.value = userMacros[editIndex].name;
+        payloadInput.value = userMacros[editIndex].payload;
+        endingInput.value = userMacros[editIndex].ending || 'global';
+      } else {
+        title.textContent = 'Add Custom Macro';
+        nameInput.value = '';
+        payloadInput.value = '';
+        endingInput.value = 'global';
+      }
+
+      modal.classList.remove('hidden');
+      nameInput.focus();
+    }
+
+    function closeMacroModal() {
+      document.getElementById('macroModal').classList.add('hidden');
+    }
+
+    function saveMacro(event) {
+      event.preventDefault();
+      const idx = parseInt(document.getElementById('macroEditIndex').value, 10);
+      const name = document.getElementById('macroNameInput').value.trim();
+      const payload = document.getElementById('macroPayloadInput').value;
+      const ending = document.getElementById('macroEndingInput').value;
+
+      if (!name) return;
+
+      const macroObj = { name, payload, ending };
+
+      if (idx >= 0) {
+        userMacros[idx] = macroObj;
+        showToast(`Updated macro "${name}"`, 'success');
+      } else {
+        userMacros.push(macroObj);
+        showToast(`Added macro "${name}"`, 'success');
+      }
+
+      persistMacros();
+      renderMacros();
+      closeMacroModal();
+    }
+
+    function deleteMacro(idx) {
+      const removed = userMacros.splice(idx, 1);
+      persistMacros();
+      renderMacros();
+      if (removed[0]) {
+        showToast(`Removed macro "${removed[0].name}"`, 'info');
+      }
+    }
+
+    // =========================================================================
+    // Security Utility
+    // =========================================================================
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+  </script>
+</body>
+</html>
